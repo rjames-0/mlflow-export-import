@@ -1,4 +1,5 @@
 from abc import abstractmethod, ABCMeta
+import base64
 import os
 import json
 import requests
@@ -96,6 +97,12 @@ class HttpClient(BaseHttpClient):
         self.host = host
         self.api_uri = os.path.join(host, api_name)
         self.token = token
+        username = os.environ.get("MLFLOW_TRACKING_USERNAME")
+        password = os.environ.get("MLFLOW_TRACKING_PASSWORD")
+        if username or password:
+            self.basic_auth = (username or "", password or "")
+        else:
+            self.basic_auth = None
 
 
     def _get(self, resource, params=None):
@@ -181,6 +188,9 @@ class HttpClient(BaseHttpClient):
         headers = { "User-Agent": USER_AGENT, "Content-Type": "application/json" }
         if self.token:
             headers["Authorization"] = f"Bearer {self.token}"
+        elif self.basic_auth:
+            auth = f"{self.basic_auth[0]}:{self.basic_auth[1]}".encode("utf-8")
+            headers["Authorization"] = "Basic " + base64.b64encode(auth).decode("utf-8")
         return headers
 
     def _mk_uri(self, resource):
