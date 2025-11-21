@@ -160,17 +160,36 @@ class ModelImporter(BaseModelImporter):
         :return: Model import manifest.
         """
         model_dct = self._import_model(model_name, input_dir, delete_model)
+        versions = sorted(model_dct.get("versions", []), key=lambda x: int(x.get("version", 0)))
+        template_vr = versions[0] if versions else None
+        placeholder_versions = []
+        next_version = 1
         _logger.info("Importing versions:")
-        for vr in model_dct.get("versions",[]):
+        for vr in versions:
             try:
+                target_version = int(vr.get("version", next_version))
+                while template_vr and next_version < target_version:
+                    template_run_id = self._import_run(input_dir, experiment_name, template_vr)
+                    if template_run_id:
+                        placeholder_vr = self.import_version(model_name, template_vr, template_run_id)
+                        placeholder_versions.append(placeholder_vr.version)
+                    next_version += 1
+
                 run_id = self._import_run(input_dir, experiment_name, vr)
                 if run_id:
                     self.import_version(model_name, vr, run_id)
+                    next_version += 1
             except RestException as e:
                 msg = { "model": model_name, "version": vr["version"], "src_run_id": vr["run_id"], "experiment": experiment_name, "RestException": str(e) }
                 _logger.error(f"Failed to import model version: {msg}")
                 import traceback
                 traceback.print_exc()
+        for version in placeholder_versions:
+            try:
+                self.mlflow_client.delete_model_version(model_name, version)
+            except RestException:
+                _logger.warning("Failed to delete placeholder model version %s for model %s", version, model_name)
+
         if verbose:
             model_utils.dump_model_versions(self.mlflow_client, model_name)
 
@@ -273,36 +292,71 @@ class BulkModelImporter(BaseModelImporter):
         :return: Model import manifest.
         """
         model_dct = self._import_model(model_name, input_dir, delete_model)
-        _logger.info(f"Importing {len(model_dct['versions'])} versions:")
-        for vr in model_dct["versions"]:
+        versions = sorted(model_dct["versions"], key=lambda x: int(x.get("version", 0)))
+        template_vr = versions[0] if versions else None
+        template_run_entry = self.run_info_map.get(template_vr["run_id"]) if template_vr else None
+        template_dst_run_info = template_run_entry["run_info"] if template_run_entry else None
+        template_dst_run_id = template_dst_run_info.run_id if template_dst_run_info else None
+        if template_vr and template_dst_run_id is None:
+            _logger.warning("Unable to locate destination run for template version %s of model %s. Version gap handling disabled.", template_vr.get("version"), model_name)
+            template_vr = None
+        placeholder_versions = []
+        next_version = 1
+        _logger.info(f"Importing {len(versions)} versions:")
+        for vr in versions:
             src_run_id = vr["run_id"]
-            dst_run_info = self.run_info_map.get(src_run_id, None)
-            if not dst_run_info:
+            run_entry = self.run_info_map.get(src_run_id, None)
+            if not run_entry:
                 msg = { "model": model_name, "version": vr["version"], "stage": vr["current_stage"], "run_id": src_run_id }
                 _logger.error(f"Cannot import model version {msg} since the source run_id was probably deleted.")
             else:
-                dst_run_id = dst_run_info.run_id
+                target_version = int(vr.get("version", next_version))
+                while template_vr and template_dst_run_id and next_version < target_version:
+                    placeholder_vr = self.import_version(model_name, template_vr, template_dst_run_id)
+                    placeholder_versions.append(placeholder_vr.version)
+                    next_version += 1
+
+                dst_run_id = run_entry["run_info"].run_id
                 exp_name = rename_utils.rename(vr["_experiment_name"], self.experiment_renames, "experiment")
                 try:
                     with MlflowTrackingUriTweak(self.mlflow_client):
                         mlflow.set_experiment(exp_name)
                     self.import_version(model_name, vr, dst_run_id)
+                    next_version += 1
                 except RestException as e:
                     msg = { "model": model_name, "version": vr.get("version",[]), "experiment": exp_name, "run_id": dst_run_id, "exception": str(e) }
                     _logger.error(f"Failed to import model version: {msg}")
+        for version in placeholder_versions:
+            try:
+                self.mlflow_client.delete_model_version(model_name, version)
+            except RestException:
+                _logger.warning("Failed to delete placeholder model version %s for model %s", version, model_name)
+
         if verbose:
             model_utils.dump_model_versions(self.mlflow_client, model_name)
 
 
     def import_version(self, model_name, src_vr, dst_run_id):
         src_run_id = src_vr["run_id"]
+        run_entry = self.run_info_map.get(src_run_id)
+        logged_models_map = run_entry.get("logged_models_map", {}) if run_entry else {}
+        dst_artifact_uri = run_entry["run_info"].artifact_uri if run_entry else None
         model_id = None
         if "models" in src_vr["source"]: # 3.x logged models
-            model_id = self.mlflow_client.get_run(dst_run_id).outputs.model_outputs[0].model_id
-            dst_source = _get_logged_model_artifact_path(model_id)
+            src_model_id = _extract_model_id(src_vr["source"])
+            model_id = logged_models_map.get(src_model_id)
+            if not model_id:
+                dst_run = self.mlflow_client.get_run(dst_run_id)
+                outputs = dst_run.outputs.model_outputs
+                if outputs:
+                    model_id = outputs[0].model_id
+                else:
+                    raise MlflowExportImportException(f"No logged model outputs found for run '{dst_run_id}' while importing model '{model_name}' version '{src_vr.get('version')}'")
+            dst_source = _get_logged_model_artifact_path(model_id, self.mlflow_client)
         else:
             model_path = _extract_model_path(src_vr["source"], src_run_id)  # get path to model artifact
-            dst_artifact_uri = self.run_info_map[src_run_id].artifact_uri
+            if not dst_artifact_uri:
+                dst_artifact_uri = self.mlflow_client.get_run(dst_run_id).info.artifact_uri
             dst_source = f"{dst_artifact_uri}/{model_path}"
         return _import_model_version(
             mlflow_client = self.mlflow_client,

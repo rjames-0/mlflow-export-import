@@ -111,7 +111,8 @@ def _import_model_version(
     ):
     start_time = time.time()
     dst_source = dst_source.replace("file://","") # OSS MLflow
-    if not (dst_source.startswith("dbfs:") or dst_source.startswith("s3:")) and not os.path.exists(dst_source):
+    remote_prefixes = ("dbfs:", "s3:", "wasbs:", "gs:", "mlflow-artifacts:", "models:/")
+    if not dst_source.startswith(remote_prefixes) and not os.path.exists(dst_source):
         raise MlflowExportImportException(f"'source' argument for MLflowClient.create_model_version does not exist: {dst_source}", http_status_code=404)
 
     tags = src_vr["tags"]

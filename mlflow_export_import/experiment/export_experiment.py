@@ -163,7 +163,8 @@ def _export_run(mlflow_client, run, output_dir,
         output_dir = os.path.join(output_dir, f'runs/{run.info.run_id}'),
         export_deleted_runs = export_deleted_runs,
         notebook_formats = notebook_formats,
-        mlflow_client = mlflow_client
+        mlflow_client = mlflow_client,
+        export_logged_models = has_logged_model_support
     )
     if is_success:
         ok_run_ids.append(run.info.run_id)

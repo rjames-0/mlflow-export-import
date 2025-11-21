@@ -155,20 +155,46 @@ def _import_models(mlflow_client,
         experiment_renames = experiment_renames
     )
 
+    futures = []
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         for model_name in model_names:
             dir = os.path.join(models_dir, model_name)
-            model_name = rename_utils.rename(model_name, model_renames, "model")
-            validate_model_name(model_name)
-            executor.submit(all_importer.import_model,
-               model_name = model_name,
-               input_dir = dir,
-               delete_model = delete_model,
-               verbose = verbose
+            renamed_model = rename_utils.rename(model_name, model_renames, "model")
+            validate_model_name(renamed_model)
+            future = executor.submit(
+                all_importer.import_model,
+                model_name = renamed_model,
+                input_dir = dir,
+                delete_model = delete_model,
+                verbose = verbose
+            )
+            futures.append((model_name, renamed_model, future))
+
+    failed_models = []
+    for original_name, renamed_model, future in futures:
+        try:
+            future.result()
+        except Exception as e:  # pylint: disable=broad-except
+            failed_models.append({
+                "model": original_name,
+                "renamed_model": renamed_model,
+                "exception": repr(e)
+            })
+            _logger.error(
+                "Failed to import model '%s' (renamed to '%s'): %s",
+                original_name,
+                renamed_model,
+                e
             )
 
     duration = round(time.time()-start_time, 1)
-    return { "models": len(model_names), "duration": duration }
+    if failed_models:
+        _logger.error("%d model imports failed", len(failed_models))
+    return {
+        "models": len(model_names),
+        "duration": duration,
+        "failed_models": failed_models
+    }
 
 
 def validate_model_name(model_name):
