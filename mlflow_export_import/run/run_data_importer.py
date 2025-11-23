@@ -12,6 +12,8 @@ from mlflow_export_import.common import utils
 from mlflow_export_import.common.source_tags import ExportTags
 from mlflow_export_import.common.source_tags import mk_source_tags_mlflow_tag, mk_source_tags
 
+_logger = utils.getLogger(__name__)
+
 
 def _log_data(run_dct, run_id, batch_size, get_data, log_data, args_get_data=None):
     metadata = get_data(run_dct, args_get_data)
@@ -37,9 +39,18 @@ def _log_metrics(client, run_dct, run_id, batch_size):
 
     def get_data(run_dct, args=None):
         metrics = []
-        for metric,steps in  run_dct["metrics"].items():
+        seen = set()
+        duplicates = 0
+        for metric_key, steps in run_dct["metrics"].items():
             for step in steps:
-                metrics.append(Metric(metric,step["value"],step["timestamp"],step["step"]))
+                key = (metric_key, step["timestamp"], step["step"])
+                if key in seen:
+                    duplicates += 1
+                    continue
+                seen.add(key)
+                metrics.append(Metric(metric_key, step["value"], step["timestamp"], step["step"]))
+        if duplicates:
+            _logger.warning("Skipped %d duplicate metric entries for run %s", duplicates, run_dct["info"].get("run_id"))
         return metrics
 
     def log_data(run_id, metrics):
