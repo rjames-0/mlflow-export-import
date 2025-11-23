@@ -8,6 +8,10 @@ from collections import defaultdict
 from packaging import version
 import mlflow
 from mlflow.entities import SpanStatus, SpanStatusCode, Span
+try:
+    from opentelemetry.proto.trace.v1.trace_pb2 import Status as OtelStatus
+except Exception:  # pragma: no cover - optional dependency handled gracefully
+    OtelStatus = None
 
 from mlflow_export_import.common import filesystem as _fs
 from mlflow_export_import.common import io_utils
@@ -88,7 +92,7 @@ def _get_span_params(span_data):
 
     if is_mlflow_3x:
         span_data = Span.from_dict(span_data).to_dict()
-        status_code = SpanStatusCode.from_proto_status_code(span_data['status']['code'])
+        status_code = _convert_status_code(span_data["status"])
         return {
             "status": SpanStatus(status_code=status_code, description=span_data["status"].get("message", "")),
             "span_id": span_data.get("span_id"),
@@ -118,3 +122,32 @@ def _write_trace_id_to_run(request_metadata, output_dir, trace_id, experiment_id
             mlflow_dct = io_utils.get_mlflow(root_dct)
             mlflow_dct.setdefault("traces", []).append(trace_id)
             io_utils.write_file(run_json_path, root_dct)
+def _convert_status_code(status_field):
+    """
+    Convert the exported status structure into a SpanStatusCode, handling both
+    old (<=3.4) and new (>=3.5) MLflow schemas.
+    """
+    code = status_field.get("code")
+
+    # MLflow <= 3.4
+    if hasattr(SpanStatusCode, "from_proto_status_code"):
+        return SpanStatusCode.from_proto_status_code(code)
+
+    # MLflow >= 3.5 exposes from_otel_proto_status_code_name
+    if hasattr(SpanStatusCode, "from_otel_proto_status_code_name"):
+        try:
+            if isinstance(code, str):
+                return SpanStatusCode.from_otel_proto_status_code_name(code)
+            if OtelStatus is not None:
+                name = OtelStatus.StatusCode.Name(code)
+                return SpanStatusCode.from_otel_proto_status_code_name(name)
+        except Exception:
+            pass
+
+    # Fallback: try direct enum conversion or default to UNSET
+    if isinstance(code, str):
+        try:
+            return SpanStatusCode(code)
+        except ValueError:
+            pass
+    return SpanStatusCode.UNSET

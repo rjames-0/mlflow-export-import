@@ -117,7 +117,8 @@ def import_trace(
         return dst_trace
     except Exception as e:
         traceback.print_exc()
-        raise MlflowExportImportException(e, f"Importing trace {dst_trace.request_id} of experiment '{exp.name}' failed")
+        trace_id = getattr(dst_trace, "request_id", "unknown")
+        raise MlflowExportImportException(e, f"Importing trace {trace_id} of experiment '{exp.name}' failed")
 
 
 def set_trace_metadata(request_id, trace_metadata):
