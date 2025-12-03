@@ -161,15 +161,17 @@ def _get_model_path(src_vr):
 
 def _extract_model_path(source):
     """
-    Extract relative path to model artifact from version source field
-    :param source: 'source' field of registered model version
-    :return: relative path to the model artifact
+    Extract relative path to model artifact from version source field.
+    Expected source formats:
+      - mlflow-artifacts:/<exp_id>/<run_id>/artifacts/<path>
+      - file:///.../mlruns/<exp_id>/<run_id>/artifacts/<path>
+    We only want the portion after the final '/artifacts/' segment.
     """
-    pattern = "artifacts"
-    idx = source.find(pattern)
+    pattern = "/artifacts/"
+    idx = source.rfind(pattern)
     if idx == -1:
         return None
-    return source[1+idx+len(pattern):]
+    return source[idx + len(pattern):]
 
 
 def _set_source_tags_for_field(dct, tags):
