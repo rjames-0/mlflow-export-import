@@ -371,23 +371,19 @@ class BulkModelImporter(BaseModelImporter):
 
 def _extract_model_path(source, run_id):
     """
-    Extract relative path to model artifact from version source field
-    :param source: 'source' field of registered model version
-    :param run_id: Run ID in the 'source field
-    :return: relative path to the model artifact
+    Extract relative path to model artifact from version source field.
+    We only want the portion after the final '/artifacts/'.
     """
-    idx = source.find(run_id)
+    if run_id not in source:
+        raise MlflowExportImportException(
+            f"Cannot find run ID '{run_id}' in registered model version source field '{source}'",
+            http_status_code=404,
+        )
+    pattern = "/artifacts/"
+    idx = source.rfind(pattern)
     if idx == -1:
-        raise MlflowExportImportException(f"Cannot find run ID '{run_id}' in registered model version source field '{source}'", http_status_code=404)
-    model_path = source[1+idx+len(run_id):]
-    pattern = "artifacts"
-
-    idx = source.find(pattern)
-    if idx == -1: # Bizarre - sometimes there is no 'artifacts' after run_id
-        model_path = ""
-    else:
-        model_path = source[1+idx+len(pattern):]
-    return model_path
+        return ""
+    return source[idx + len(pattern):]
 
 
 def _path_join(x, y):
